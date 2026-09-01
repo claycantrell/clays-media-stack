@@ -58,10 +58,10 @@ To clear it (needs the stack running, all local):
 
 1. `./stack.sh up`, open <http://localhost:8096>
 2. Dashboard → Users → `admin` → Password → set one
-3. Dashboard → Users → **+** → add an account for your mom
+3. Dashboard → Users → **+** → add an account for each viewer
    - give it library access only
    - leave every admin checkbox off
-4. Jellyseerr authenticates against Jellyfin, so her single login works for both
+4. Jellyseerr authenticates against Jellyfin, so one login works for both
 
 ---
 
@@ -88,8 +88,8 @@ from this Mac to the viewer, which keeps you out of that rule entirely.
 Forward TCP **80** and **443** to this Mac's LAN address. Port 80 is required —
 Let's Encrypt uses it for the HTTP-01 challenge.
 
-Your LAN IP is DHCP-assigned (it was `172.16.0.2`). Give this Mac a static DHCP
-reservation or the forward will silently point at the wrong device one day.
+Your LAN IP is DHCP-assigned. Give this Mac a static DHCP reservation, or the forward
+will silently point at the wrong device one day.
 
 Your *public* IP is probably dynamic too. If it changes, the A records go stale —
 use your registrar's DDNS or a Cloudflare DDNS updater.
@@ -136,7 +136,7 @@ dig +short watch.yourdomain.com                        # expect YOUR ip, not Clo
 ./stack.sh logs caddy                                  # watch a real request land
 ```
 
-Then log in as your mom's account from a device that isn't on your network —
+Then log in as a non-admin viewer account from a device that isn't on your network —
 cellular data on a phone is the honest test.
 
 ---
@@ -153,7 +153,7 @@ Public access ends immediately. Nothing else is affected.
 
 ## Optional: one app instead of two
 
-By default she'd use Jellyfin to watch and Jellyseerr to request — two icons,
+By default a viewer uses Jellyfin to watch and Jellyseerr to request — two icons,
 one password.
 
 [JellyBridge](https://github.com/kinggeorges12/JellyBridge) is a Jellyfin plugin
@@ -194,9 +194,9 @@ Already in the config:
 
 Worth adding later:
 
-- **GeoIP allow-list.** If it's only you and one other person in the US, blocking
-  every other country removes most automated traffic. Easiest via Cloudflare WAF
-  on the `request` hostname; needs the maxmind Caddy module for `watch`.
+- **GeoIP allow-list.** If every legitimate viewer is in one country, blocking the
+  rest removes most automated traffic. Easiest via Cloudflare WAF on the `request`
+  hostname; needs the maxmind Caddy module for `watch`.
 - **Keep Jellyfin updated.** It's exposed now; `docker compose pull` periodically.
 - **Admin stays local.** Don't use the admin account remotely.
 

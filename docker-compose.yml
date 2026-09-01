@@ -358,10 +358,10 @@ networks:
     # without credentials. If the subnet drifts, both apps silently lose their
     # download client.
     #
-    # 10.89 is deliberately OUTSIDE Docker's default pool (172.17-172.31). The
-    # supabase worktree stacks on this machine allocate from that pool and have
-    # already claimed 172.18-172.25 and counting, so a pin inside it collides
-    # with "Pool overlaps with other one on this address space" sooner or later.
+    # 10.89 is deliberately OUTSIDE Docker's default pool (172.17-172.31). Any
+    # other Compose project on the host draws from that pool and long-lived ones
+    # accumulate, so a pin inside it collides with "Pool overlaps with other one
+    # on this address space" sooner or later.
     # Keep in sync with config/qbittorrent/qBittorrent.conf.
     ipam:
       config:

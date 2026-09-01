@@ -271,18 +271,18 @@ The `media-stack` network pins `subnet: 10.89.0.0/16`. This is **load-bearing**:
 qBittorrent's `WebUI\AuthSubnetWhitelist` is set to that range, and it's how Sonarr and
 Radarr reach the qBittorrent API without credentials.
 
-Docker allocates subnets from a shared pool, and other projects on this machine create
-networks too. Without the pin, a rebuilt `media-stack` network could land on a different
-subnet — and Sonarr/Radarr would silently lose their download client with no obvious
-error. If you ever change one, change both.
+Docker allocates subnets from a shared pool, and other projects on the same machine
+create networks too. Without the pin, a rebuilt `media-stack` network could land on a
+different subnet — and Sonarr/Radarr would silently lose their download client with no
+obvious error. If you ever change one, change both.
 
 **Why `10.89` and not something in `172.x`:** Docker's default pool is
-`172.17.0.0/16` through `172.31.0.0/16`. The Supabase worktree stacks on this machine
-allocate from that pool and have already claimed `172.18`–`172.25`, gaining another
-each time a new worktree spins up. This network was originally pinned to `172.19`,
-which a new `oncall-w8` worktree took hours later — producing
+`172.17.0.0/16` through `172.31.0.0/16`. Any other Compose project on the host draws
+from that pool, and long-lived ones accumulate — so a pin *inside* the default range
+is a collision waiting to happen. This network was originally pinned to `172.19` and
+another project claimed it hours later, producing
 `invalid pool request: Pool overlaps with other one on this address space` on the next
-start. `10.89` sits outside the default pool entirely, so it can't be claimed out from
+start. `10.89` sits outside the default pool entirely, so it can't be taken out from
 under this stack.
 
 ---
@@ -294,14 +294,15 @@ under this stack.
 - **Radarr/Sonarr → Jellyfin** — `MediaBrowser` connection firing on import, upgrade,
   and rename, so Jellyfin updates immediately instead of waiting for a scheduled scan.
 - **Jellyseerr → Jellyfin/Sonarr/Radarr** — internal hostnames; external URL set to
-  `http://172.16.0.2:8096` so "Play on Jellyfin" links work from a browser.
+  the host's LAN address (`http://<lan-ip>:8096`) so "Play on Jellyfin" links work
+  from a browser.
 - **auto-trackers** — polls qBittorrent every 60s and injects the
   [ngosang trackerslist](https://ngosang.github.io/trackerslist/) into any torrent with
   no real trackers, then force-reannounces. Public-indexer magnets often ship with none,
   and qBittorrent's built-in tracker auto-add only applies to `.torrent` files.
 
-> `172.16.0.2` is DHCP-assigned. If the lease changes, Jellyseerr's Jellyfin links break
-> until you update the external URL. A static DHCP reservation makes it permanent.
+> That LAN address is DHCP-assigned. If the lease changes, Jellyseerr's Jellyfin links
+> break until you update the external URL. A static DHCP reservation makes it permanent.
 
 ---
 
@@ -346,10 +347,11 @@ docker compose run --rm recyclarr sync             # apply
   Radarr rejects it with `400 BadRequest` — even with `forceSave=true`. This is indexer
   behaviour meeting Radarr's validation rule, not a fixable setting. Sonarr accepts it
   fine, so it's available for TV only. Knaben trips the same rule intermittently.
-- **Docker's VM allocation.** Containers use ~2.2 GB, but Docker Desktop reserves ~9.7 GB
-  of the Mac's 16 GB by default. Stopping containers does **not** hand that back to
-  macOS — only lowering the allocation (Settings → Resources → Memory) or quitting
-  Docker Desktop does. On a machine already deep into swap, this is the lever that matters.
+- **Docker's VM allocation.** Containers use ~2.2 GB, but Docker Desktop reserves far
+  more than that for its VM by default. Stopping containers does **not** hand the
+  reservation back to macOS — only lowering the allocation (Settings → Resources →
+  Memory) or quitting Docker Desktop does. Once the host is into swap, this is the
+  lever that matters.
 
 ---
 
@@ -395,5 +397,5 @@ are relative, so they follow the folder.
   (Caddy + CrowdSec, see [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)).
 - `.env`, `config/`, `media/`, `downloads/`, `logs/`, and `backups/` are gitignored.
   This README is deliberately secret-free, but `config/` never is.
-- Storage grows fast. The Mac's 460 GB drive is at ~90% — a mini PC with an NVMe
-  (Beelink S12 Pro, GMKtec NucBox G3, any N100 box) is the real long-term home.
+- Storage grows fast. Media fills a laptop SSD quickly; a low-power mini PC with an
+  NVMe drive is a better long-term home than a machine you also work on.
