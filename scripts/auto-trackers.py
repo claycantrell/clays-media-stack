@@ -7,8 +7,12 @@ import json, os, time, urllib.parse, urllib.request
 from http.cookiejar import CookieJar
 
 QBIT_HOST = os.environ.get("QBIT_HOST", "http://localhost:8080")
-QBIT_USER = os.environ.get("QBIT_USER", "admin")
-QBIT_PASS = os.environ.get("QBIT_PASS", "rolloffmedia")
+# No credential defaults on purpose. qBittorrent is configured with
+# WebUI\LocalHostAuth=false and an AuthSubnetWhitelist covering the compose
+# network, so this script authenticates by origin rather than by password. If
+# you tighten either of those, supply QBIT_USER/QBIT_PASS via the environment.
+QBIT_USER = os.environ.get("QBIT_USER", "")
+QBIT_PASS = os.environ.get("QBIT_PASS", "")
 TRACKER_URL = os.environ.get(
     "TRACKER_URL",
     "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt",
@@ -46,6 +50,24 @@ def login():
     return "Ok" in post("/api/v2/auth/login", {"username": QBIT_USER, "password": QBIT_PASS})
 
 
+def api_reachable():
+    """True if the API answers without a session.
+
+    qBittorrent here runs with WebUI\\LocalHostAuth=false, and this script shares
+    gluetun's network namespace - so its requests arrive on loopback and are
+    authenticated by origin. In that configuration /auth/login returns "Fails."
+    for every credential pair, including the right one, because there is no
+    password check to pass. Gating the loop on login() therefore blocked the
+    injection code permanently.
+    """
+    try:
+        with opener.open(f"{QBIT_HOST}/api/v2/app/version", timeout=10) as r:
+            r.read()
+        return True
+    except Exception:
+        return False
+
+
 trackers, last_refresh, last_login = [], 0, 0
 
 log("auto-trackers starting")
@@ -65,10 +87,12 @@ while True:
                     continue
 
         if now - last_login > LOGIN_INTERVAL:
-            if login():
+            if api_reachable():
+                last_login = now
+            elif login():
                 last_login = now
             else:
-                log("qbit login failed; retrying")
+                log("qbit unreachable and login failed; retrying")
                 time.sleep(30)
                 continue
 
