@@ -1,0 +1,8 @@
+# Log sources CrowdSec watches. Caddy writes JSON access logs into
+# ./logs/caddy (mounted read-only into the crowdsec container), and the
+# caddy + jellyfin collections parse them for attack patterns.
+---
+filenames:
+  - /var/log/caddy/*.log
+labels:
+  type: caddy

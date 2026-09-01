@@ -1,0 +1,84 @@
+# Caddy reverse proxy for remote access.
+#
+# Domains come from .env (DOMAIN_WATCH / DOMAIN_REQUEST). Caddy provisions and
+# renews Let's Encrypt certificates automatically - no cert config needed.
+#
+# IMPORTANT - Cloudflare proxy settings differ per hostname:
+#
+#   DOMAIN_WATCH   (Jellyfin)    -> DNS only, GREY cloud.
+#       Cloudflare's terms restrict serving video hosted outside Cloudflare
+#       through their CDN. Grey cloud means Cloudflare answers DNS and the
+#       video goes straight from this Mac to the viewer.
+#
+#   DOMAIN_REQUEST (Jellyseerr)  -> proxied, ORANGE cloud is fine.
+#       HTML and small API calls only. You also gain Cloudflare's WAF here.
+
+{
+	# CrowdSec must evaluate a request before any other handler runs.
+	order crowdsec first
+	# Required by caddy-ratelimit so the directive has a defined position.
+	order rate_limit before basicauth
+
+	crowdsec {
+		api_url http://crowdsec:8080
+		api_key {$CROWDSEC_API_KEY}
+		ticker_interval 15s
+	}
+}
+
+(hardening) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# don't advertise what's running
+		-Server
+	}
+}
+
+# ---------------------------------------------------------------- watch (Jellyfin)
+{$DOMAIN_WATCH} {
+	crowdsec
+	import hardening
+
+	# Brute-force guard. This is THE endpoint attackers hammer - it's the same
+	# one that accepted a blank admin password before hardening.
+	@login path /Users/AuthenticateByName
+	rate_limit @login {
+		zone jellyfin_login {
+			key {remote_host}
+			events 5
+			window 1m
+		}
+	}
+
+	reverse_proxy jellyfin:8096
+
+	log {
+		output file /var/log/caddy/jellyfin.log
+		format json
+	}
+}
+
+# ------------------------------------------------------------ request (Jellyseerr)
+{$DOMAIN_REQUEST} {
+	crowdsec
+	import hardening
+
+	@auth path /api/v1/auth/*
+	rate_limit @auth {
+		zone jellyseerr_login {
+			key {remote_host}
+			events 10
+			window 1m
+		}
+	}
+
+	reverse_proxy jellyseerr:5055
+
+	log {
+		output file /var/log/caddy/jellyseerr.log
+		format json
+	}
+}

@@ -1,0 +1,368 @@
+services:
+  # VPN Container - All torrent traffic goes through here
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    # 512m not 256m: steady state is ~67 MB, but gluetun spikes while building
+    # its DNS blocklists at startup. If gluetun gets OOM-killed, qbittorrent
+    # loses its whole network namespace with it - expensive failure, cheap margin.
+    mem_limit: 512m
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      # qBittorrent WebUI - admin only, loopback so it is not on the LAN
+      - 127.0.0.1:8080:8080
+      # torrent peer port - MUST stay reachable or port forwarding is pointless
+      - 6881:6881
+      - 6881:6881/udp
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - OPENVPN_USER=${OPENVPN_USER:?missing OPENVPN_USER - check media-stack/.env}
+      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD:?missing OPENVPN_PASSWORD - check media-stack/.env}
+      - SERVER_COUNTRIES=Sweden
+      - VPN_PORT_FORWARDING=on
+      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --post-data="json=%7B%22listen_port%22%3A{{PORTS}}%7D" http://127.0.0.1:8080/api/v2/app/setPreferences'
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config/gluetun:/gluetun
+    restart: unless-stopped
+
+  # qBittorrent - Routes through VPN (no internet if VPN drops)
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    mem_limit: 1024m
+    network_mode: "service:gluetun"
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/Los_Angeles
+      - WEBUI_PORT=8080
+    volumes:
+      - ./config/qbittorrent:/config
+      - ./downloads:/downloads
+    restart: unless-stopped
+    depends_on:
+      # wait for the VPN tunnel to be up before starting on its netns
+      gluetun:
+        condition: service_healthy
+
+  # Auto-trackers - injects public trackers into any qBit torrent that has
+  # none (magnets from public indexers often have zero trackers attached).
+  auto-trackers:
+    image: python:3.12-alpine
+    container_name: auto-trackers
+    mem_limit: 128m
+    network_mode: "service:gluetun"
+    volumes:
+      - ./scripts/auto-trackers.py:/auto-trackers.py:ro
+    command: python /auto-trackers.py
+    restart: unless-stopped
+    depends_on:
+      - gluetun
+      - qbittorrent
+
+  # FlareSolverr - Cloudflare bypass for indexers like 1337x, EZTV
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    mem_limit: 768m
+    environment:
+      - LOG_LEVEL=info
+      - TZ=America/Los_Angeles
+    ports:
+      # only prowlarr talks to this, and it does so over the docker network
+      - 127.0.0.1:8191:8191
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - autoheal=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8191/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Prowlarr - Indexer manager (replaces Jackett, syncs to Sonarr/Radarr)
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    mem_limit: 768m
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - 127.0.0.1:9696:9696
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9696/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    depends_on:
+      # wait for FlareSolverr to be READY, not just started - otherwise
+      # Cloudflare-gated indexers (1337x, EZTV) fail and get long-backoff'd
+      flaresolverr:
+        condition: service_healthy
+        restart: true
+
+  # Sonarr - TV Shows
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    mem_limit: 1024m
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config/sonarr:/config
+      - ./media/tv:/tv
+      - ./downloads:/downloads
+    ports:
+      - 127.0.0.1:8989:8989
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8989/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    depends_on:
+      # restart: true - when the VPN flaps, sonarr loses its download client
+      # and needs a restart to pick it back up
+      gluetun:
+        condition: service_healthy
+        restart: true
+      prowlarr:
+        condition: service_healthy
+
+  # Radarr - Movies
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    mem_limit: 1024m
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config/radarr:/config
+      - ./media/movies:/movies
+      - ./downloads:/downloads
+    ports:
+      - 127.0.0.1:7878:7878
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7878/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+      prowlarr:
+        condition: service_healthy
+
+  # Jellyfin - Media streaming
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    mem_limit: 2048m
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config/jellyfin:/config
+      - ./media/tv:/data/tvshows
+      - ./media/movies:/data/movies
+    ports:
+      # stays on 0.0.0.0 - this is what LAN clients and Caddy-remote viewers use
+      - 8096:8096
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+
+  # Jellyseerr - Request portal
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    mem_limit: 768m
+    environment:
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config/jellyseerr:/app/config
+    ports:
+      # stays on 0.0.0.0 - friends and family request through this
+      - 5055:5055
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5055/api/v1/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    depends_on:
+      jellyfin:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+
+  # Recyclarr - syncs TRaSH Guides quality profiles and custom formats into
+  # Sonarr and Radarr, then re-syncs on CRON_SCHEDULE.
+  #
+  # Pinned to major version 8 on purpose. Recyclarr's config schema is versioned
+  # and a major bump can invalidate recyclarr.yml - this is the one image in this
+  # file where :latest is an actual hazard rather than just untidy.
+  #
+  # No healthcheck and no autoheal label: this container sleeps between cron runs
+  # and exposes no endpoint, so "not responding" is its normal state.
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:8
+    container_name: recyclarr
+    mem_limit: 256m
+    # this image has no PUID/PGID; it takes a real uid:gid instead
+    user: "501:20"
+    environment:
+      - TZ=America/Los_Angeles
+      - CRON_SCHEDULE=@daily
+    volumes:
+      - ./config/recyclarr:/config
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+
+  # Autoheal - restarts any container that its own healthcheck reports as
+  # unhealthy. Opt-in per container via the `autoheal=true` label.
+  #
+  # gluetun and qbittorrent are deliberately NOT labelled. qbittorrent lives in
+  # gluetun's network namespace, so an autoheal restart of gluetun would strand
+  # qbittorrent with a dead network stack - exactly the failure the mem_limit
+  # comment above is guarding against. VPN recovery stays with stack.sh, which
+  # re-verifies egress before letting torrent traffic run again.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    mem_limit: 64m
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=300
+      - TZ=America/Los_Angeles
+    volumes:
+      # read-write by necessity: restarting a container is a write operation.
+      # This grants root-equivalent control of the docker daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Remote access. NOT started by a normal `docker compose up -d` - these sit
+  # behind the "remote" profile, so they only come up with:
+  #     docker compose --profile remote up -d      (or ./stack.sh remote up)
+  #
+  # Note the ${VAR:-default} syntax below. Compose interpolates the ENTIRE file
+  # regardless of which profiles are active, so a required-variable (${VAR:?})
+  # here would break the normal stack for anyone without a domain configured.
+  # Real values are validated at runtime by stack.sh instead.
+  # ---------------------------------------------------------------------------
+
+  # Caddy - TLS termination + reverse proxy. Custom build; see caddy/Dockerfile.
+  caddy:
+    build:
+      context: ./caddy
+    container_name: caddy
+    mem_limit: 256m
+    profiles: ["remote"]
+    ports:
+      - 80:80
+      - 443:443
+      - 443:443/udp        # HTTP/3
+    environment:
+      - DOMAIN_WATCH=${DOMAIN_WATCH:-watch.example.invalid}
+      - DOMAIN_REQUEST=${DOMAIN_REQUEST:-request.example.invalid}
+      - CROWDSEC_API_KEY=${CROWDSEC_API_KEY:-unset}
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./config/caddy/data:/data          # certificates - back this up
+      - ./config/caddy/config:/config
+      - ./logs/caddy:/var/log/caddy        # read by crowdsec
+    restart: unless-stopped
+    depends_on:
+      - jellyfin
+      - jellyseerr
+
+  # CrowdSec - reads Caddy's logs, decides who to block. Caddy enforces.
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    mem_limit: 512m
+    profiles: ["remote"]
+    environment:
+      - COLLECTIONS=crowdsecurity/caddy LePresidente/jellyfin
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config/crowdsec/data:/var/lib/crowdsec/data
+      - ./config/crowdsec/config:/etc/crowdsec
+      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - ./logs/caddy:/var/log/caddy:ro
+    restart: unless-stopped
+
+networks:
+  default:
+    name: media-stack
+    # Subnet is PINNED on purpose. qBittorrent's WebUI\AuthSubnetWhitelist must
+    # match it - that whitelist is how Sonarr/Radarr reach the qBittorrent API
+    # without credentials. If the subnet drifts, both apps silently lose their
+    # download client.
+    #
+    # 10.89 is deliberately OUTSIDE Docker's default pool (172.17-172.31). The
+    # supabase worktree stacks on this machine allocate from that pool and have
+    # already claimed 172.18-172.25 and counting, so a pin inside it collides
+    # with "Pool overlaps with other one on this address space" sooner or later.
+    # Keep in sync with config/qbittorrent/qBittorrent.conf.
+    ipam:
+      config:
+        - subnet: 10.89.0.0/16

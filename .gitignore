@@ -1,0 +1,7 @@
+.env
+config/
+downloads/
+media/
+logs/
+.DS_Store
+backups/
