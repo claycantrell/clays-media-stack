@@ -46,20 +46,54 @@ until all three exist.
 
 ## Services
 
-| Service | Port | URL | Purpose |
-|---|---|---|---|
-| Jellyfin | 8096 | http://localhost:8096 | Media server — **watch here** |
-| Jellyseerr | 5055 | http://localhost:5055 | Request portal — **request here** |
-| Radarr | 7878 | http://localhost:7878 | Movie automation |
-| Sonarr | 8989 | http://localhost:8989 | TV automation |
-| Prowlarr | 9696 | http://localhost:9696 | Indexer manager |
-| qBittorrent | 8080 | http://localhost:8080 | Torrent client (via VPN) |
-| FlareSolverr | 8191 | http://localhost:8191 | Cloudflare bypass for indexers |
-| gluetun | — | no UI | ProtonVPN tunnel (qBittorrent shares its netns) |
-| auto-trackers | — | no UI | Injects public trackers into trackerless magnets |
+| Service | Port | URL | Reachable from | Purpose |
+|---|---|---|---|---|
+| Jellyfin | 8096 | http://localhost:8096 | **the LAN** | Media server — **watch here** |
+| Jellyseerr | 5055 | http://localhost:5055 | **the LAN** | Request portal — **request here** |
+| Radarr | 7878 | http://localhost:7878 | this Mac only | Movie automation |
+| Sonarr | 8989 | http://localhost:8989 | this Mac only | TV automation |
+| Prowlarr | 9696 | http://localhost:9696 | this Mac only | Indexer manager |
+| qBittorrent | 8080 | http://localhost:8080 | this Mac only | Torrent client (via VPN) |
+| FlareSolverr | 8191 | http://localhost:8191 | this Mac only | Cloudflare bypass for indexers |
+| gluetun | — | no UI | — | ProtonVPN tunnel (qBittorrent shares its netns) |
+| auto-trackers | — | no UI | — | Injects public trackers into trackerless magnets |
+| Recyclarr | — | no UI | — | Syncs TRaSH Guides profiles + custom formats daily |
+| autoheal | — | no UI | — | Restarts any container its own healthcheck fails |
 
 **Use `localhost`, not `jellyfin`.** Service names like `jellyfin` and `gluetun` only
 resolve *inside* the Docker network — a browser can't reach them.
+
+---
+
+## Port exposure
+
+Only the two services other people actually use are published on `0.0.0.0`:
+
+```
+jellyfin        0.0.0.0:8096     watch      - LAN clients and the remote profile
+jellyseerr      0.0.0.0:5055     request    - LAN clients and the remote profile
+gluetun         0.0.0.0:6881     peer port  - inbound torrent connections
+radarr        127.0.0.1:7878     admin
+sonarr        127.0.0.1:8989     admin
+prowlarr      127.0.0.1:9696     admin
+qbittorrent   127.0.0.1:8080     admin      (published by gluetun - shared netns)
+flaresolverr  127.0.0.1:8191     internal
+```
+
+The admin UIs have **no authentication at all**, so the binding *is* the access
+control — a `127.0.0.1` publish means nothing on the LAN can open a socket to them,
+which is a stronger guarantee than an unauthenticated service behind a login-less
+page. Verify from another machine:
+
+```bash
+curl -m 3 http://<this-mac-lan-ip>:8989   # should fail to connect
+curl -m 3 http://<this-mac-lan-ip>:8096   # should answer
+```
+
+`6881` stays public deliberately: it's the torrent peer port, and closing it makes
+gluetun's port forwarding pointless. Remote access does **not** need any of these
+publishes — Caddy reaches `jellyfin:8096` and `jellyseerr:5055` over the Docker
+network by container name.
 
 ---
 
@@ -102,6 +136,7 @@ media-stack/
 │   └── REMOTE-ACCESS.md    ← how to expose this to the internet safely
 ├── config/                 ← ALL service state: databases, settings, API keys
 │   ├── gluetun/ qbittorrent/ prowlarr/ sonarr/ radarr/ jellyfin/ jellyseerr/
+│   └── recyclarr/          ← TRaSH sync config (holds Sonarr/Radarr API keys)
 ├── downloads/              ← qBittorrent working dir
 │   ├── complete/  incomplete/
 ├── media/                  ← Radarr/Sonarr import here, Jellyfin reads here
@@ -135,6 +170,9 @@ sqlite3 config/jellyfin/data/data/jellyfin.db "select Name from ApiKeys;"
 
 # ProtonVPN credentials
 cat .env
+
+# Recyclarr's copies of the Sonarr/Radarr keys
+grep -h 'api_key:' config/recyclarr/configs/*.yml
 ```
 
 **Logins**
@@ -143,14 +181,17 @@ cat .env
   Jellyfin, so this is also your Jellyseerr login (leave the password field empty).
 - **qBittorrent** — the WebUI has a password, but Sonarr/Radarr don't use it: they're
   exempted by `WebUI\AuthSubnetWhitelist=10.89.0.0/16` (see *Pinned subnet* below).
-- **Radarr / Sonarr / Prowlarr / FlareSolverr** — no auth, local access only.
+- **Radarr / Sonarr / Prowlarr / FlareSolverr** — no auth. They are bound to
+  `127.0.0.1` (see *Port exposure*), so "local access only" is enforced by the
+  socket rather than by a password.
 
-> ⚠️ **Jellyfin's admin account has a blank password**, and both Jellyfin (8096) and
-> Jellyseerr (5055) bind to `0.0.0.0`. Anyone on your LAN can reach them and get an
-> admin session by typing `admin` and pressing enter. Jellyfin admin also allows
-> arbitrary filesystem browsing when adding libraries. Fix at
-> *Jellyfin → Dashboard → Users → admin → Password*; Jellyseerr picks it up on next
-> login. Alternatively bind to `127.0.0.1:8096:8096` if you only watch on this Mac.
+> ⚠️ **Jellyfin's admin account has a blank password**, and Jellyfin (8096) and
+> Jellyseerr (5055) are the two services still bound to `0.0.0.0`. Anyone on your LAN
+> can reach them and get an admin session by typing `admin` and pressing enter.
+> Jellyfin admin also allows arbitrary filesystem browsing when adding libraries.
+> Fix at *Jellyfin → Dashboard → Users → admin → Password*; Jellyseerr picks it up on
+> next login. Moving these to `127.0.0.1` is not an option unless you only ever watch
+> on this Mac — they are the whole point of the stack being reachable.
 
 ---
 
@@ -192,11 +233,37 @@ after completion. Change it in `config/qbittorrent/qBittorrent/qBittorrent.conf`
 
 `depends_on` alone only waits for a container to *start*, not to be *ready* — which
 previously let Prowlarr query Cloudflare-gated indexers before FlareSolverr was up,
-failing them into a 6-hour backoff. Now:
+failing them into a 6-hour backoff. Now every service with an HTTP endpoint has a
+healthcheck, and dependents wait on `condition: service_healthy`:
 
-- **FlareSolverr** has a healthcheck against its `/health` endpoint.
-- **Prowlarr** waits for `condition: service_healthy`.
-- **qBittorrent** waits for gluetun to be healthy before starting on its netns.
+| Service | Probe |
+|---|---|
+| gluetun | built into the image |
+| FlareSolverr | `/health` |
+| Prowlarr / Sonarr / Radarr | `/ping` |
+| Jellyfin | `/health` |
+| Jellyseerr | `/api/v1/status` |
+
+Sonarr and Radarr additionally carry `restart: true` on their gluetun dependency, so a
+VPN flap restarts them instead of leaving them holding a dead download client.
+
+**The probes are not interchangeable.** `fallenbagel/jellyseerr` ships `wget` and no
+`curl`; the Jellyfin image ships `curl` and no `wget`. A copy-pasted `curl` healthcheck
+on Jellyseerr marks it unhealthy forever — and with autoheal watching, restarts it
+every 30 seconds indefinitely. Check the binary exists in the image before writing the
+probe:
+
+```bash
+docker run --rm --entrypoint sh <image> -c 'command -v curl wget'
+```
+
+**autoheal** restarts anything its healthcheck fails, opt-in via the `autoheal=true`
+label. gluetun and qBittorrent are deliberately **unlabelled**: qBittorrent lives in
+gluetun's network namespace, so an autoheal restart of gluetun would strand it with a
+dead network stack. VPN recovery stays with `stack.sh`, which re-verifies egress before
+letting torrent traffic resume. Note that autoheal mounts the Docker socket read-write,
+which is root-equivalent control of the daemon — unavoidable for something whose job is
+restarting containers, but it is a real trade.
 
 ## Pinned subnet
 
@@ -240,12 +307,35 @@ under this stack.
 
 ## Quality profiles
 
-Both apps use a tightened `HD-1080p` profile:
+**In use:** a hand-tightened `HD-1080p` profile in both apps:
 
 - Allowed: HDTV-1080p, WEBDL-1080p, WEBRip-1080p, Bluray-1080p
 - Rejected: anything below 1080p, Remux-1080p, 2160p/4K and above
 - Cutoff: WEB-1080p
 - Size cap: 80 MB/min movies (~8 GB for a 100-min film), 70 MB/min TV (~3 GB/episode)
+
+**Also available, not yet assigned:** Recyclarr syncs the TRaSH Guides profiles daily
+and has created `HD Bluray + WEB` in Radarr (40 custom formats) and `WEB-1080p` in
+Sonarr (37). Recyclarr creates profiles; it does **not** reassign your library, so
+nothing downloads differently until you switch titles onto them. Expect Radarr to start
+hunting upgrades on existing files when you do, since the TRaSH cutoff score is higher
+than what those files scored.
+
+The stock profiles will show the new custom formats listed against them. That is
+cosmetic — Radarr registers custom formats globally, and they are scored `0` in any
+profile Recyclarr does not manage.
+
+Config lives in `config/recyclarr/configs/`. Recyclarr is pinned to major version `8`
+rather than `:latest`, because its config schema is versioned and a major bump can
+invalidate `recyclarr.yml` — the one image here where `:latest` is a hazard rather than
+just untidy. It also takes a literal `user: "501:20"` instead of `PUID`/`PGID`.
+
+Run it by hand with:
+
+```bash
+docker compose run --rm recyclarr sync --preview   # dry run, changes nothing
+docker compose run --rm recyclarr sync             # apply
+```
 
 ---
 
@@ -276,6 +366,8 @@ Both apps use a tightened `HD-1080p` profile:
 | qBittorrent stalled, peers = 0 | listen port out of sync with VPN forwarded port | `docker exec gluetun cat /tmp/gluetun/forwarded_port`, compare to qBittorrent → Settings → Connection |
 | Stack won't start, `required variable OPENVPN_USER` | `.env` missing or unreadable | Restore `.env` (this failure is intentional — it prevents an unauthenticated VPN) |
 | Everything sluggish, containers OOM-killed | Mac is out of RAM / swap full | `sysctl vm.swapusage`; lower Docker's memory allocation |
+| Every service refuses connections at once, `docker ps` hangs for minutes | the Docker **daemon** is wedged, not the stack | Confirm with `curl -s --unix-socket ~/.docker/run/docker.sock http://x/_ping` — empty means dead. A normal quit often will not clear it: the backend can ignore SIGTERM and survive with the same PID. `pkill -9 -f com.docker` then `open -a Docker` |
+| A container restarts every ~30s forever | its healthcheck references a binary the image lacks, and autoheal is acting on the failure | `docker inspect -f '{{json .State.Health}}' <name>`; fix the probe (see *Startup ordering*) |
 
 ---
 
@@ -299,7 +391,8 @@ are relative, so they follow the folder.
 
 ## Notes
 
-- LAN-only. To watch away from home, use Tailscale or a reverse proxy with HTTPS.
+- LAN-only by default. To watch away from home, use the `remote` profile
+  (Caddy + CrowdSec, see [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)).
 - `.env`, `config/`, `media/`, `downloads/`, `logs/`, and `backups/` are gitignored.
   This README is deliberately secret-free, but `config/` never is.
 - Storage grows fast. The Mac's 460 GB drive is at ~90% — a mini PC with an NVMe
