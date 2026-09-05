@@ -113,7 +113,7 @@ Jellyseerr  →  Radarr / Sonarr  →  Prowlarr  →  qBittorrent  →  import  
 2. Radarr (movies) or Sonarr (TV) picks a release matching the quality profile.
 3. Prowlarr searches the configured indexers.
 4. qBittorrent downloads it inside gluetun's network namespace.
-5. Radarr/Sonarr move and rename it into `media/movies` or `media/tv`.
+5. Radarr/Sonarr move and rename it into `data/media/movies` or `data/media/tv`.
 6. **Radarr/Sonarr notify Jellyfin on import**, so it appears immediately.
 
 Watch progress in **Radarr → Activity → Queue** (or Sonarr for TV). That single page
@@ -146,15 +146,16 @@ media-stack/
 ├── config/                 ← ALL service state: databases, settings, API keys
 │   ├── gluetun/ qbittorrent/ prowlarr/ sonarr/ radarr/ jellyfin/ jellyseerr/
 │   └── recyclarr/          ← TRaSH sync config (holds Sonarr/Radarr API keys)
-├── downloads/              ← qBittorrent working dir
-│   ├── complete/  incomplete/
-├── media/                  ← Radarr/Sonarr import here, Jellyfin reads here
-│   ├── movies/  tv/
+├── data/                   ← ONE bind mount (/data) so imports HARDLINK, never copy
+│   ├── downloads/          ← qBittorrent working dir
+│   │   ├── complete/  incomplete/
+│   └── media/              ← Radarr/Sonarr import here, Jellyfin reads here
+│       ├── movies/  tv/
 ├── logs/                   ← stack.sh run logs
 └── backups/                ← archived compose files
 ```
 
-`config/`, `downloads/`, `media/`, and `scripts/auto-trackers.py` are **bind-mounted
+`config/`, `data/`, and `scripts/auto-trackers.py` are **bind-mounted
 into containers**. Moving or renaming them breaks the stack. `config/` is the whole
 backup surface — it holds every database, setting, and API key.
 
@@ -394,12 +395,12 @@ tar -czf media-stack-config-$(date +%Y%m%d).tar.gz \
   docker-compose.yml stack.sh README.md .env config/
 ```
 
-On the new machine: extract, `mkdir -p media/{movies,tv} downloads/{complete,incomplete}`,
+On the new machine: extract, `mkdir -p data/media/{movies,tv} data/downloads/{complete,incomplete}`,
 set `PUID`/`PGID` in `.env` to the uid/gid that owns those folders (`id -u`, `id -g`;
 Ubuntu = 1000/1000) and `chown -R` the copied `config/` to match, then `./stack.sh up`.
 The full Mac → Ubuntu walkthrough is in [docs/UBUNTU-SERVER.md](docs/UBUNTU-SERVER.md).
 
-Container-internal paths (`/movies`, `/tv`, `/data/movies`) don't change, and host mounts
+Container-internal paths (`/data/media/movies`, `/data/media/tv`, `/data/movies`) and host mounts
 are relative, so they follow the folder.
 
 ---

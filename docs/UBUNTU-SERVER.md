@@ -69,7 +69,7 @@ docker compose version                       # >= 2.17 (the compose file uses de
 git clone -b pc https://github.com/claycantrell/clays-media-stack.git ~/media-stack
 cd ~/media-stack
 cp .env.example .env && chmod 600 .env
-mkdir -p config media/{movies,tv} downloads/{complete,incomplete} logs
+mkdir -p config data/media/{movies,tv} data/downloads/{complete,incomplete} logs
 ```
 
 Fill in `.env`: the ProtonVPN credentials, and confirm `PUID`/`PGID` match `id -u` / `id -g`
@@ -83,22 +83,30 @@ API keys, copy `config/` (and the media, if you want it) from the Mac.
 ```bash
 mac$ cd ~/media-stack && ./stack.sh down          # databases must be closed
 mac$ rsync -avh --progress config/ media@media:~/media-stack/config/
-mac$ rsync -avh --progress media/  media@media:~/media-stack/media/       # optional, big
-mac$ rsync -avh --progress downloads/ media@media:~/media-stack/downloads/ # optional
+mac$ rsync -avh --progress media/  media@media:~/media-stack/data/media/       # optional, big
+mac$ rsync -avh --progress downloads/ media@media:~/media-stack/data/downloads/ # optional
 ```
 
 Then on the server, make the files belong to the uid the containers run as:
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" ~/media-stack/{config,media,downloads}
+sudo chown -R "$(id -u):$(id -g)" ~/media-stack/{config,data}
 ```
 
 That `chown` is the step Docker Desktop hid from you. Without it Sonarr/Radarr fail to
 import ("Access to the path is denied") and Jellyfin can't write its database.
 
-Container-side paths (`/config`, `/movies`, `/tv`, `/data/movies`, `/downloads`) are
-unchanged, so every library path, root folder and download-client setting carries over.
-Two things do **not** carry over:
+Media, TV and downloads now live under a single `/data` mount (so Radarr/Sonarr
+**hardlink** on import instead of copying — no duplicate files, no wasted space). If you
+are migrating a config from the Mac (where the paths were `/movies`, `/tv`, `/downloads`),
+repoint three things after first start, or imports land in the wrong place:
+
+- **Radarr → Settings → Media Management → Root Folders:** `/data/media/movies`
+- **Sonarr → root folder:** `/data/media/tv`
+- **qBittorrent → Options → Downloads → Default Save Path:** `/data/downloads/complete`
+  (temp `/data/downloads/incomplete`)
+
+Two more things do **not** carry over:
 
 - **Jellyseerr → Settings → Jellyfin → External URL** still points at the Mac's LAN IP.
   Change it to `http://<server-lan-ip>:8096`.

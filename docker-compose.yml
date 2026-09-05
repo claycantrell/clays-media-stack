@@ -48,7 +48,7 @@ services:
       - WEBUI_PORT=8080
     volumes:
       - ./config/qbittorrent:/config
-      - ./downloads:/downloads
+      - ./data:/data
     restart: unless-stopped
     depends_on:
       # wait for the VPN tunnel to be up before starting on its netns
@@ -135,8 +135,7 @@ services:
       - TZ=America/Los_Angeles
     volumes:
       - ./config/sonarr:/config
-      - ./media/tv:/tv
-      - ./downloads:/downloads
+      - ./data:/data
     ports:
       - ${ADMIN_BIND:-127.0.0.1}:8989:8989
     security_opt:
@@ -170,8 +169,7 @@ services:
       - TZ=America/Los_Angeles
     volumes:
       - ./config/radarr:/config
-      - ./media/movies:/movies
-      - ./downloads:/downloads
+      - ./data:/data
     ports:
       - ${ADMIN_BIND:-127.0.0.1}:7878:7878
     security_opt:
@@ -209,8 +207,8 @@ services:
       - TZ=America/Los_Angeles
     volumes:
       - ./config/jellyfin:/config
-      - ./media/tv:/data/tvshows
-      - ./media/movies:/data/movies
+      - ./data/media/tv:/data/tvshows
+      - ./data/media/movies:/data/movies
     ports:
       # stays on 0.0.0.0 - this is what LAN clients and Caddy-remote viewers use
       - 8096:8096
