@@ -1,3 +1,9 @@
+# Per-host knobs come from .env (see .env.example):
+#   PUID / PGID   uid:gid that owns ./config ./media ./downloads on the host.
+#                 Ubuntu's first user is 1000:1000. (macOS was 501:20.)
+#   ADMIN_BIND    address the admin UIs are published on. Default 127.0.0.1
+#                 (this host only - use an SSH tunnel). 0.0.0.0 = whole LAN.
+
 services:
   # VPN Container - All torrent traffic goes through here
   gluetun:
@@ -12,8 +18,8 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     ports:
-      # qBittorrent WebUI - admin only, loopback so it is not on the LAN
-      - 127.0.0.1:8080:8080
+      # qBittorrent WebUI - admin only. ADMIN_BIND defaults to loopback (off the LAN)
+      - ${ADMIN_BIND:-127.0.0.1}:8080:8080
       # torrent peer port - MUST stay reachable or port forwarding is pointless
       - 6881:6881
       - 6881:6881/udp
@@ -36,8 +42,8 @@ services:
     mem_limit: 1024m
     network_mode: "service:gluetun"
     environment:
-      - PUID=501
-      - PGID=20
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - TZ=America/Los_Angeles
       - WEBUI_PORT=8080
     volumes:
@@ -74,7 +80,7 @@ services:
       - TZ=America/Los_Angeles
     ports:
       # only prowlarr talks to this, and it does so over the docker network
-      - 127.0.0.1:8191:8191
+      - ${ADMIN_BIND:-127.0.0.1}:8191:8191
     security_opt:
       - no-new-privileges:true
     labels:
@@ -93,13 +99,13 @@ services:
     container_name: prowlarr
     mem_limit: 768m
     environment:
-      - PUID=501
-      - PGID=20
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - TZ=America/Los_Angeles
     volumes:
       - ./config/prowlarr:/config
     ports:
-      - 127.0.0.1:9696:9696
+      - ${ADMIN_BIND:-127.0.0.1}:9696:9696
     security_opt:
       - no-new-privileges:true
     labels:
@@ -124,15 +130,15 @@ services:
     container_name: sonarr
     mem_limit: 1024m
     environment:
-      - PUID=501
-      - PGID=20
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - TZ=America/Los_Angeles
     volumes:
       - ./config/sonarr:/config
       - ./media/tv:/tv
       - ./downloads:/downloads
     ports:
-      - 127.0.0.1:8989:8989
+      - ${ADMIN_BIND:-127.0.0.1}:8989:8989
     security_opt:
       - no-new-privileges:true
     labels:
@@ -159,15 +165,15 @@ services:
     container_name: radarr
     mem_limit: 1024m
     environment:
-      - PUID=501
-      - PGID=20
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - TZ=America/Los_Angeles
     volumes:
       - ./config/radarr:/config
       - ./media/movies:/movies
       - ./downloads:/downloads
     ports:
-      - 127.0.0.1:7878:7878
+      - ${ADMIN_BIND:-127.0.0.1}:7878:7878
     security_opt:
       - no-new-privileges:true
     labels:
@@ -191,9 +197,15 @@ services:
     image: lscr.io/linuxserver/jellyfin:latest
     container_name: jellyfin
     mem_limit: 2048m
+    # Intel Quick Sync on the N150's iGPU. The linuxserver image adds its
+    # user to whatever group owns /dev/dri/renderD128, so no group_add needed.
+    # Still has to be switched on in Jellyfin: Dashboard -> Playback ->
+    # Transcoding -> Intel QuickSync (QSV). Linux only - macOS has no /dev/dri.
+    devices:
+      - /dev/dri:/dev/dri
     environment:
-      - PUID=501
-      - PGID=20
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - TZ=America/Los_Angeles
     volumes:
       - ./config/jellyfin:/config
@@ -258,8 +270,8 @@ services:
     image: ghcr.io/recyclarr/recyclarr:8
     container_name: recyclarr
     mem_limit: 256m
-    # this image has no PUID/PGID; it takes a real uid:gid instead
-    user: "501:20"
+    # this image has no PUID/PGID; it takes a real uid:gid instead (same .env values)
+    user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       - TZ=America/Los_Angeles
       - CRON_SCHEDULE=@daily

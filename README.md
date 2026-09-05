@@ -9,6 +9,9 @@ two runs itself.
 
 ## Quick start
 
+**On the Ubuntu mini PC?** Do [docs/UBUNTU-SERVER.md](docs/UBUNTU-SERVER.md) first -
+Docker install, `.env`, migrating `config/` from the Mac, Quick Sync, boot service.
+
 ```bash
 cd ~/media-stack
 ./stack.sh up
@@ -50,11 +53,11 @@ until all three exist.
 |---|---|---|---|---|
 | Jellyfin | 8096 | http://localhost:8096 | **the LAN** | Media server — **watch here** |
 | Jellyseerr | 5055 | http://localhost:5055 | **the LAN** | Request portal — **request here** |
-| Radarr | 7878 | http://localhost:7878 | this Mac only | Movie automation |
-| Sonarr | 8989 | http://localhost:8989 | this Mac only | TV automation |
-| Prowlarr | 9696 | http://localhost:9696 | this Mac only | Indexer manager |
-| qBittorrent | 8080 | http://localhost:8080 | this Mac only | Torrent client (via VPN) |
-| FlareSolverr | 8191 | http://localhost:8191 | this Mac only | Cloudflare bypass for indexers |
+| Radarr | 7878 | http://localhost:7878 | this host only | Movie automation |
+| Sonarr | 8989 | http://localhost:8989 | this host only | TV automation |
+| Prowlarr | 9696 | http://localhost:9696 | this host only | Indexer manager |
+| qBittorrent | 8080 | http://localhost:8080 | this host only | Torrent client (via VPN) |
+| FlareSolverr | 8191 | http://localhost:8191 | this host only | Cloudflare bypass for indexers |
 | gluetun | — | no UI | — | ProtonVPN tunnel (qBittorrent shares its netns) |
 | auto-trackers | — | no UI | — | Injects public trackers into trackerless magnets |
 | Recyclarr | — | no UI | — | Syncs TRaSH Guides profiles + custom formats daily |
@@ -83,11 +86,13 @@ flaresolverr  127.0.0.1:8191     internal
 The admin UIs have **no authentication at all**, so the binding *is* the access
 control — a `127.0.0.1` publish means nothing on the LAN can open a socket to them,
 which is a stronger guarantee than an unauthenticated service behind a login-less
-page. Verify from another machine:
+page. On a headless server, reach them through an SSH tunnel (see
+[docs/UBUNTU-SERVER.md](docs/UBUNTU-SERVER.md)) or set `ADMIN_BIND=0.0.0.0` in `.env`
+to publish them on the LAN. Verify from another machine:
 
 ```bash
-curl -m 3 http://<this-mac-lan-ip>:8989   # should fail to connect
-curl -m 3 http://<this-mac-lan-ip>:8096   # should answer
+curl -m 3 http://<server-lan-ip>:8989   # should fail to connect
+curl -m 3 http://<server-lan-ip>:8096   # should answer
 ```
 
 `6881` stays public deliberately: it's the torrent peer port, and closing it makes
@@ -122,7 +127,8 @@ shows the grab, download progress, and import.
 media-stack/
 ├── stack.sh                ← start/stop/status (use this)
 ├── docker-compose.yml      ← service definitions
-├── .env                    ← ProtonVPN credentials (chmod 600, gitignored)
+├── .env                    ← ProtonVPN credentials + host knobs (chmod 600, gitignored)
+├── .env.example            ← template for .env
 ├── .gitignore
 ├── README.md               ← this file
 ├── scripts/
@@ -133,7 +139,10 @@ media-stack/
 ├── crowdsec/
 │   └── acquis.yaml         ← which logs CrowdSec watches
 ├── docs/
+│   ├── UBUNTU-SERVER.md    ← setting up / migrating to the Ubuntu mini PC
 │   └── REMOTE-ACCESS.md    ← how to expose this to the internet safely
+├── systemd/
+│   └── media-stack.service ← start the stack (with VPN check) at boot on Linux
 ├── config/                 ← ALL service state: databases, settings, API keys
 │   ├── gluetun/ qbittorrent/ prowlarr/ sonarr/ radarr/ jellyfin/ jellyseerr/
 │   └── recyclarr/          ← TRaSH sync config (holds Sonarr/Radarr API keys)
@@ -191,7 +200,7 @@ grep -h 'api_key:' config/recyclarr/configs/*.yml
 > Jellyfin admin also allows arbitrary filesystem browsing when adding libraries.
 > Fix at *Jellyfin → Dashboard → Users → admin → Password*; Jellyseerr picks it up on
 > next login. Moving these to `127.0.0.1` is not an option unless you only ever watch
-> on this Mac — they are the whole point of the stack being reachable.
+> on this machine — they are the whole point of the stack being reachable.
 
 ---
 
@@ -329,7 +338,8 @@ profile Recyclarr does not manage.
 Config lives in `config/recyclarr/configs/`. Recyclarr is pinned to major version `8`
 rather than `:latest`, because its config schema is versioned and a major bump can
 invalidate `recyclarr.yml` — the one image here where `:latest` is a hazard rather than
-just untidy. It also takes a literal `user: "501:20"` instead of `PUID`/`PGID`.
+just untidy. It also takes a literal `user:` uid:gid instead of `PUID`/`PGID`, wired
+to the same `.env` values.
 
 Run it by hand with:
 
@@ -347,7 +357,7 @@ docker compose run --rm recyclarr sync             # apply
   Radarr rejects it with `400 BadRequest` — even with `forceSave=true`. This is indexer
   behaviour meeting Radarr's validation rule, not a fixable setting. Sonarr accepts it
   fine, so it's available for TV only. Knaben trips the same rule intermittently.
-- **Docker's VM allocation.** Containers use ~2.2 GB, but Docker Desktop reserves far
+- **Docker's VM allocation (macOS only).** Containers use ~2.2 GB, but Docker Desktop reserves far
   more than that for its VM by default. Stopping containers does **not** hand the
   reservation back to macOS — only lowering the allocation (Settings → Resources →
   Memory) or quitting Docker Desktop does. Once the host is into swap, this is the
@@ -367,9 +377,10 @@ docker compose run --rm recyclarr sync             # apply
 | `Pool overlaps with other one on this address space` | another project claimed the pinned subnet | Pick a free range outside Docker's default `172.17–172.31` pool, and update **both** compose and `qBittorrent.conf` |
 | qBittorrent stalled, peers = 0 | listen port out of sync with VPN forwarded port | `docker exec gluetun cat /tmp/gluetun/forwarded_port`, compare to qBittorrent → Settings → Connection |
 | Stack won't start, `required variable OPENVPN_USER` | `.env` missing or unreadable | Restore `.env` (this failure is intentional — it prevents an unauthenticated VPN) |
-| Everything sluggish, containers OOM-killed | Mac is out of RAM / swap full | `sysctl vm.swapusage`; lower Docker's memory allocation |
-| Every service refuses connections at once, `docker ps` hangs for minutes | the Docker **daemon** is wedged, not the stack | Confirm with `curl -s --unix-socket ~/.docker/run/docker.sock http://x/_ping` — empty means dead. A normal quit often will not clear it: the backend can ignore SIGTERM and survive with the same PID. `pkill -9 -f com.docker` then `open -a Docker` |
+| Everything sluggish, containers OOM-killed | host is out of RAM / swap full | Linux: `free -h`, add zram/swap (docs/UBUNTU-SERVER.md). macOS: `sysctl vm.swapusage`; lower Docker's memory allocation |
+| Every service refuses connections at once, `docker ps` hangs for minutes | the Docker **daemon** is wedged, not the stack | Linux: `sudo systemctl restart docker`. macOS: confirm with `curl -s --unix-socket ~/.docker/run/docker.sock http://x/_ping` — empty means dead. A normal quit often will not clear it: the backend can ignore SIGTERM and survive with the same PID. `pkill -9 -f com.docker` then `open -a Docker` |
 | A container restarts every ~30s forever | its healthcheck references a binary the image lacks, and autoheal is acting on the failure | `docker inspect -f '{{json .State.Health}}' <name>`; fix the probe (see *Startup ordering*) |
+| Jellyfin transcodes on CPU, fan spins up, playback stutters | Quick Sync not switched on in Jellyfin | Dashboard → Playback → Transcoding → Intel QuickSync; see docs/UBUNTU-SERVER.md |
 
 ---
 
@@ -384,7 +395,9 @@ tar -czf media-stack-config-$(date +%Y%m%d).tar.gz \
 ```
 
 On the new machine: extract, `mkdir -p media/{movies,tv} downloads/{complete,incomplete}`,
-adjust `PUID`/`PGID` in `docker-compose.yml` if your UID isn't 501/20, then `./stack.sh up`.
+set `PUID`/`PGID` in `.env` to the uid/gid that owns those folders (`id -u`, `id -g`;
+Ubuntu = 1000/1000) and `chown -R` the copied `config/` to match, then `./stack.sh up`.
+The full Mac → Ubuntu walkthrough is in [docs/UBUNTU-SERVER.md](docs/UBUNTU-SERVER.md).
 
 Container-internal paths (`/movies`, `/tv`, `/data/movies`) don't change, and host mounts
 are relative, so they follow the folder.
@@ -397,5 +410,5 @@ are relative, so they follow the folder.
   (Caddy + CrowdSec, see [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)).
 - `.env`, `config/`, `media/`, `downloads/`, `logs/`, and `backups/` are gitignored.
   This README is deliberately secret-free, but `config/` never is.
-- Storage grows fast. Media fills a laptop SSD quickly; a low-power mini PC with an
-  NVMe drive is a better long-term home than a machine you also work on.
+- Storage grows fast. Media fills a laptop SSD quickly; this stack's long-term home is
+  the N150 mini PC running Ubuntu Server (see [docs/UBUNTU-SERVER.md](docs/UBUNTU-SERVER.md)).

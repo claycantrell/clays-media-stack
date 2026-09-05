@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Backing script for the double-clickable .app bundles in ~/Applications.
+# macOS ONLY - backing script for the double-clickable .app bundles in
+# ~/Applications (osascript dialogs, Docker Desktop). On the Ubuntu server the
+# equivalent is systemd/media-stack.service; see docs/UBUNTU-SERVER.md.
 #
 #   app-launcher.sh watch    start Jellyfin only, open it in the browser
 #   app-launcher.sh full     start the whole stack (VPN + downloaders), open Jellyseerr

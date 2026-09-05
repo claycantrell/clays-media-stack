@@ -1,0 +1,28 @@
+# Starts the media stack at boot through stack.sh, so the VPN leak check runs
+# before qBittorrent is left up. Docker's own `restart: unless-stopped` would
+# bring the containers back on its own, but without that check.
+#
+# Install (replace USERNAME with the account that owns ~/media-stack):
+#   sed "s/USERNAME/$USER/g" systemd/media-stack.service | sudo tee /etc/systemd/system/media-stack.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now media-stack
+#   journalctl -u media-stack -f        # watch a start
+
+[Unit]
+Description=Media stack (docker compose + VPN leak check)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=USERNAME
+WorkingDirectory=/home/USERNAME/media-stack
+ExecStart=/home/USERNAME/media-stack/stack.sh up
+ExecStop=/home/USERNAME/media-stack/stack.sh down
+# first boot after an image update can pull for a while
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
